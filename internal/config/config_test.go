@@ -8,6 +8,20 @@ import (
 	"testing"
 )
 
+func TestMCPExclusionsLoad(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[notion.mcp]\nexclude = ['99999999-9999-4999-8999-999999999999', 'https://notion.so/11111111111111111111111111111111']\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Notion.MCP.Exclude) != 2 {
+		t.Fatalf("exclusions not loaded: %+v", cfg.Notion.MCP)
+	}
+}
+
 func TestDesktopWorkspaceConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if _, err := WriteStarter(path); err != nil {

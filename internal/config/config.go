@@ -49,12 +49,13 @@ type APIConfig struct {
 }
 
 type MCPConfig struct {
-	Enabled     bool   `toml:"enabled"`
-	BaseURL     string `toml:"base_url"`
-	AuthPath    string `toml:"auth_path"`
-	ConnectorID string `toml:"connector_id"`
-	MaxPages    int    `toml:"max_pages"`
-	Discover    bool   `toml:"discover"`
+	Exclude     []string `toml:"exclude"`
+	Enabled     bool     `toml:"enabled"`
+	BaseURL     string   `toml:"base_url"`
+	AuthPath    string   `toml:"auth_path"`
+	ConnectorID string   `toml:"connector_id"`
+	MaxPages    int      `toml:"max_pages"`
+	Discover    bool     `toml:"discover"`
 }
 
 type ShareConfig struct {
