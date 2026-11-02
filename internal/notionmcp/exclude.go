@@ -105,22 +105,25 @@ func (e *exclusions) skip(candidate pageCandidate, summary *Summary) bool {
 	}
 	id := candidate.ID
 	seen := map[string]bool{}
-	blocked := true
+	blocked := !candidate.SearchVerified || e.requireAncestry
 	for depth := 0; depth < 100; depth++ {
-		if e.ids[id] || seen[id] {
+		if e.ids[id] {
+			blocked = true
+			break
+		}
+		if seen[id] {
 			break
 		}
 		seen[id] = true
 		parent, ok := e.parents[id]
 		if !ok {
-			blocked = depth != 0 || !candidate.SearchVerified || e.requireAncestry
 			break
 		}
 		if e.ids[parent.ID] {
+			blocked = true
 			break
 		}
 		if parent.ID == "" {
-			blocked = depth != 0 || !candidate.SearchVerified || e.requireAncestry
 			break
 		}
 		if parent.Table == "space" || parent.Table == "team" {

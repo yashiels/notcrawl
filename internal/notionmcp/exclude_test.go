@@ -197,3 +197,37 @@ func TestPageExclusionRequiresStoredAncestryForNewSearchHits(t *testing.T) {
 		t.Fatal("unknown descendant of excluded page could be fetched")
 	}
 }
+
+func TestSearchVerifiedPartialAncestry(t *testing.T) {
+	partial := map[string]store.ParentRef{crawlPageA: {ID: crawlPageB, Table: "block"}}
+	blank := map[string]store.ParentRef{crawlPageA: {ID: crawlPageB, Table: "block"}, crawlPageB: {}}
+	resolved := map[string]store.ParentRef{crawlPageA: {ID: crawlPageB, Table: "block"}, crawlPageB: {ID: excludedTeam, Table: "team"}}
+	cycle := map[string]store.ParentRef{crawlPageA: {ID: crawlPageB, Table: "block"}, crawlPageB: {ID: crawlPageA, Table: "page"}}
+	deep := map[string]store.ParentRef{crawlPageA: {ID: "0", Table: "block"}}
+	for i := 0; i < 101; i++ {
+		deep[fmt.Sprint(i)] = store.ParentRef{ID: fmt.Sprint(i + 1), Table: "block"}
+	}
+	for _, tc := range []struct {
+		name            string
+		search          bool
+		requireAncestry bool
+		parents         map[string]store.ParentRef
+		blocked         bool
+	}{
+		{"team search partial", true, false, partial, false},
+		{"team search blank tail", true, false, blank, false},
+		{"team search excluded ancestor", true, false, resolved, true},
+		{"link partial", false, false, partial, true},
+		{"page search partial", true, true, partial, true},
+		{"team search cycle", true, false, cycle, false},
+		{"team search depth", true, false, deep, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &exclusions{ids: map[string]bool{excludedTeam: true}, parents: tc.parents, skipped: map[string]bool{}, requireAncestry: tc.requireAncestry}
+			var summary Summary
+			if got := e.skip(pageCandidate{ID: crawlPageA, SearchVerified: tc.search}, &summary); got != tc.blocked {
+				t.Fatalf("blocked=%v, want %v", got, tc.blocked)
+			}
+		})
+	}
+}
