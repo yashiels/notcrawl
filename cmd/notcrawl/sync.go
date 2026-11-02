@@ -23,18 +23,21 @@ func runSync(ctx context.Context, stdout, stderr io.Writer, cfg config.Config, a
 	verbose := fs.Bool("verbose", false, "write redacted sync diagnostics to stderr")
 	limit := fs.Int("limit", cfg.Notion.MCP.MaxPages, "maximum Notion MCP pages to fetch; 0 means unlimited")
 	discover := fs.Bool("discover", cfg.Notion.MCP.Discover, "crawl the Notion workspace through the connector: archived IDs, recent edits, linked pages")
-	var pageIDs, queries stringListFlag
+	var pageIDs, queries, excludes stringListFlag
 	fs.Var(&pageIDs, "page", "Notion page ID or URL to fetch; repeatable")
 	fs.Var(&queries, "query", "targeted Notion workspace query; repeatable, maximum 25 results each")
+	fs.Var(&excludes, "exclude", "Notion page/teamspace ID or URL to exclude; repeatable, adds to config exclusions")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
 		return fmt.Errorf("sync takes flags only")
 	}
-	if *source != "notion-mcp" && (len(pageIDs) > 0 || len(queries) > 0 || *limit != cfg.Notion.MCP.MaxPages || *discover != cfg.Notion.MCP.Discover) {
-		return fmt.Errorf("--page, --query, --limit, and --discover apply only to --source notion-mcp")
+	if *source != "notion-mcp" && (len(pageIDs) > 0 || len(queries) > 0 || len(excludes) > 0 || *limit != cfg.Notion.MCP.MaxPages || *discover != cfg.Notion.MCP.Discover) {
+		return fmt.Errorf("--page, --query, --exclude, --limit, and --discover apply only to --source notion-mcp")
 	}
+	allExcludes := append([]string(nil), cfg.Notion.MCP.Exclude...)
+	allExcludes = append(allExcludes, excludes...)
 	trace := newSyncTrace(stderr, *verbose)
 	defer func() { err = trace.finish(err) }()
 	trace.start("archive")
@@ -105,7 +108,7 @@ func runSync(ctx context.Context, stdout, stderr io.Writer, cfg config.Config, a
 			fmt.Fprintf(stdout, "api: users=%d pages=%d databases=%d database_rows=%d blocks=%d comments=%d\n", s.Users, s.Pages, s.Databases, s.DatabaseRows, s.Blocks, s.Comments)
 		case "notion-mcp":
 			trace.start("notion-mcp")
-			s, err := syncNotionMCP(ctx, st, cfg, notionmcp.SyncOptions{PageIDs: pageIDs, Queries: queries, Limit: *limit, Discover: *discover})
+			s, err := syncNotionMCP(ctx, st, cfg, notionmcp.SyncOptions{PageIDs: pageIDs, Queries: queries, Limit: *limit, Discover: *discover, Exclude: allExcludes})
 			if err != nil {
 				return err
 			}
@@ -116,6 +119,9 @@ func runSync(ctx context.Context, stdout, stderr io.Writer, cfg config.Config, a
 				writeSyncWarnings(stderr, s.Warnings)
 			}
 			fmt.Fprintf(stdout, "notion-mcp: candidates=%d pages=%d empty=%d failed=%d not_found=%d\n", s.Candidates, s.Pages, s.EmptyPages, s.Failed, s.NotFound)
+			if len(allExcludes) > 0 {
+				fmt.Fprintf(stdout, "excluded: %d\n", s.Excluded)
+			}
 		default:
 			return fmt.Errorf("unknown source %q", *source)
 		}
