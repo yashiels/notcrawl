@@ -12,10 +12,19 @@ import (
 
 const excludedTeam = "99999999-9999-4999-8999-999999999999"
 
+func exclusionStore(t *testing.T) *store.Store {
+	t.Helper()
+	st := newCrawlStore(t)
+	if err := st.UpsertTeam(context.Background(), store.Team{ID: excludedTeam, Name: "Excluded", Source: store.SourceDesktop}); err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
 func TestExcludedSweepAndQueryNeverFetchNewTeamPage(t *testing.T) {
 	for _, discover := range []bool{true, false} {
 		t.Run(map[bool]string{true: "discovery", false: "targeted"}[discover], func(t *testing.T) {
-			st := newCrawlStore(t)
+			st := exclusionStore(t)
 			fixture := newCrawlFixture()
 			fixture.filtered = []searchResult{{ID: crawlPageF}}
 			fixture.sweep = []searchResult{{ID: crawlPageF}, {ID: crawlPageD}}
@@ -43,7 +52,7 @@ func TestExcludedSweepAndQueryNeverFetchNewTeamPage(t *testing.T) {
 
 func TestExcludedSearchFailureDisablesSweepAndQuery(t *testing.T) {
 	for _, discover := range []bool{true, false} {
-		st := newCrawlStore(t)
+		st := exclusionStore(t)
 		fixture := newCrawlFixture()
 		fixture.failFiltered = true
 		summary, err := newCrawlClient(t, fixture).Sync(context.Background(), st, SyncOptions{Discover: discover, Queries: []string{"recent"}, Exclude: []string{excludedTeam}})
@@ -58,7 +67,7 @@ func TestExcludedSearchFailureDisablesSweepAndQuery(t *testing.T) {
 
 func TestExcludedAncestorsAndUnknownReferencesNeverFetch(t *testing.T) {
 	ctx := context.Background()
-	st := newCrawlStore(t)
+	st := exclusionStore(t)
 	for _, page := range []store.Page{
 		{ID: crawlPageA, Title: "A", ParentID: crawlPageB, ParentTable: "block", Alive: true, Source: store.SourceDesktop},
 		{ID: crawlPageD, Title: "D", ParentID: excludedTeam, ParentTable: "team", Alive: true, Source: store.SourceDesktop},
@@ -98,7 +107,7 @@ func TestExcludedAncestorsAndUnknownReferencesNeverFetch(t *testing.T) {
 }
 
 func TestExcludeRejectsInvalidReferenceBeforeGateway(t *testing.T) {
-	st := newCrawlStore(t)
+	st := exclusionStore(t)
 	_, err := (Client{}).Sync(context.Background(), st, SyncOptions{Exclude: []string{"invalid"}})
 	if err == nil || !strings.Contains(err.Error(), "exclude") {
 		t.Fatalf("invalid exclusion accepted: %v", err)
@@ -107,7 +116,7 @@ func TestExcludeRejectsInvalidReferenceBeforeGateway(t *testing.T) {
 
 func TestFilteredPageWithIncompleteStoredAncestryStaysExcluded(t *testing.T) {
 	ctx := context.Background()
-	st := newCrawlStore(t)
+	st := exclusionStore(t)
 	fixture := newCrawlFixture()
 	fixture.sweep = []searchResult{{ID: crawlPageA}}
 	fixture.filtered = fixture.sweep
@@ -122,7 +131,7 @@ func TestFilteredPageWithIncompleteStoredAncestryStaysExcluded(t *testing.T) {
 
 func TestExcludePageURLAndUnsafeAncestry(t *testing.T) {
 	ctx := context.Background()
-	st := newCrawlStore(t)
+	st := exclusionStore(t)
 	fixture := newCrawlFixture()
 	fixture.sweep = nil
 	summary, err := newCrawlClient(t, fixture).Sync(ctx, st, SyncOptions{Discover: true, PageIDs: []string{crawlPageA}, Exclude: []string{"https://notion.so/A-11111111111111111111111111111111"}})
@@ -162,7 +171,7 @@ func TestExcludePageURLAndUnsafeAncestry(t *testing.T) {
 
 func TestExcludedBlockParentSurvivesBlankPageParent(t *testing.T) {
 	ctx := context.Background()
-	st := newCrawlStore(t)
+	st := exclusionStore(t)
 	if err := st.UpsertBlock(ctx, store.Block{ID: crawlPageA, ParentID: excludedTeam, ParentTable: "team", Type: "page", Alive: true, Source: store.SourceDesktop}); err != nil {
 		t.Fatal(err)
 	}
@@ -174,5 +183,17 @@ func TestExcludedBlockParentSurvivesBlankPageParent(t *testing.T) {
 	}
 	if contains(fixture.fetchedIDs(), crawlPageA) || summary.Excluded == 0 {
 		t.Fatalf("block ancestry ignored: %v", fixture.fetchedIDs())
+	}
+}
+
+func TestPageExclusionRequiresStoredAncestryForNewSearchHits(t *testing.T) {
+	st := exclusionStore(t)
+	fixture := newCrawlFixture()
+	_, err := newCrawlClient(t, fixture).Sync(context.Background(), st, SyncOptions{Discover: true, Queries: []string{"recent"}, Exclude: []string{crawlPageA}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contains(fixture.fetchedIDs(), crawlPageF) {
+		t.Fatal("unknown descendant of excluded page could be fetched")
 	}
 }

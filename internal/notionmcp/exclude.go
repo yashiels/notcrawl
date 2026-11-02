@@ -9,10 +9,11 @@ import (
 )
 
 type exclusions struct {
-	ids     map[string]bool
-	teams   []string
-	parents map[string]store.ParentRef
-	skipped map[string]bool
+	requireAncestry bool
+	ids             map[string]bool
+	teams           []string
+	parents         map[string]store.ParentRef
+	skipped         map[string]bool
 }
 
 func loadExclusions(ctx context.Context, st *store.Store, refs []string) (*exclusions, error) {
@@ -87,6 +88,9 @@ func loadExclusions(ctx context.Context, st *store.Store, refs []string) (*exclu
 		}
 	}
 	for _, id := range sortedKeys(e.ids) {
+		if !teamIDs[id] {
+			e.requireAncestry = true
+		}
 		_, stored := e.parents[id]
 		if teamIDs[id] || !stored {
 			e.teams = append(e.teams, id)
@@ -109,14 +113,14 @@ func (e *exclusions) skip(candidate pageCandidate, summary *Summary) bool {
 		seen[id] = true
 		parent, ok := e.parents[id]
 		if !ok {
-			blocked = depth != 0 || !candidate.SearchVerified
+			blocked = depth != 0 || !candidate.SearchVerified || e.requireAncestry
 			break
 		}
 		if e.ids[parent.ID] {
 			break
 		}
 		if parent.ID == "" {
-			blocked = depth != 0 || !candidate.SearchVerified
+			blocked = depth != 0 || !candidate.SearchVerified || e.requireAncestry
 			break
 		}
 		if parent.Table == "space" || parent.Table == "team" {

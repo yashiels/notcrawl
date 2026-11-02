@@ -77,7 +77,7 @@ notcrawl sync --source notion-mcp --discover --limit 0
 ```
 
 Set `exclude = ["TEAMSPACE_ID", "PAGE_ID_OR_URL"]` under `[notion.mcp]`, or add repeatable `sync --source notion-mcp --exclude ID_OR_URL` flags, to skip those subtrees without deleting archived data.
-Searches subtract matching teamspace-scoped results before fetching; links and explicit pages with unknown or incomplete stored ancestry are skipped when exclusions are configured. Failed teamspace searches disable that sweep/query.
+Searches subtract matching teamspace-scoped results before fetching; unknown or incomplete ancestry is skipped for links/explicit pages, and for search hits when a page root or unrecognized ID is excluded. Failed teamspace searches disable that sweep/query.
 
 Each run seeds from every page and collection already in the archive plus a connector search for pages edited since the previous run, then follows child pages, linked pages, databases, and `collection://` data sources breadth-first. Records already fetched are skipped but their stored links are still followed, so a crawl cut short by `--limit` resumes on the next run; `--limit 0` is unlimited. The recent-edit search uses the connector's `last_edited` sort and last-edited date filter when `tools/list` advertises them, and takes at most half of `--limit`; without either, discovery relies on links and `--query`. Rate-limited gateway responses (HTTP 429/503) back off using `Retry-After` and retry up to five times; a failed page is skipped and retried on the next run. With `discover = true`, `sync --source all` runs the crawl on a machine without the Notion app once `[notion.desktop] enabled = false`.
 
