@@ -21,6 +21,7 @@ type Client struct {
 }
 
 type SyncOptions struct {
+	Exclude  []string
 	PageIDs  []string
 	Queries  []string
 	Limit    int
@@ -28,6 +29,7 @@ type SyncOptions struct {
 }
 
 type Summary struct {
+	Excluded   int
 	Candidates int
 	Pages      int
 	EmptyPages int
@@ -37,11 +39,13 @@ type Summary struct {
 }
 
 type pageCandidate struct {
-	ID       string
-	FetchRef string
-	Page     store.Page
-	Cursor   string
-	Refresh  bool
+	SearchVerified bool
+	Explicit       bool
+	ID             string
+	FetchRef       string
+	Page           store.Page
+	Cursor         string
+	Refresh        bool
 }
 
 type searchResult struct {
@@ -63,6 +67,10 @@ func (c Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) (Su
 	if st == nil {
 		return Summary{}, fmt.Errorf("missing store")
 	}
+	excluded, err := loadExclusions(ctx, st, opts.Exclude)
+	if err != nil {
+		return Summary{}, err
+	}
 	gateway, tools, err := c.gateway(ctx)
 	if err != nil {
 		return Summary{}, err
@@ -72,15 +80,20 @@ func (c Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) (Su
 		return Summary{}, err
 	}
 	if opts.Discover {
-		return c.discover(ctx, gateway, tools, st, existing, opts)
+		return c.discover(ctx, gateway, tools, st, existing, opts, excluded)
 	}
-	candidates, err := c.candidates(ctx, gateway, tools, st, existing, opts)
+	var summary Summary
+	candidates, err := c.candidates(ctx, gateway, tools, st, existing, opts, excluded, &summary)
 	if err != nil {
 		return Summary{}, err
 	}
-	summary := Summary{Candidates: len(candidates)}
+	summary.Candidates = len(candidates)
 	now := store.NowMS()
 	for _, candidate := range candidates {
+		if excluded.skip(candidate, &summary) {
+			summary.Candidates--
+			continue
+		}
 		result, err := gateway.fetchPage(ctx, tools.Fetch, candidate.FetchRef)
 		if err != nil {
 			summary.Failed++
@@ -172,6 +185,8 @@ func (c Client) candidates(
 	st *store.Store,
 	existing map[string]store.Page,
 	opts SyncOptions,
+	excluded *exclusions,
+	summary *Summary,
 ) ([]pageCandidate, error) {
 	selected := map[string]pageCandidate{}
 	add := func(candidate pageCandidate) {
@@ -179,6 +194,9 @@ func (c Client) candidates(
 			return
 		}
 		if _, ok := selected[candidate.ID]; ok {
+			return
+		}
+		if excluded.skip(candidate, summary) {
 			return
 		}
 		selected[candidate.ID] = candidate
@@ -193,7 +211,7 @@ func (c Client) candidates(
 		if id == "" {
 			return nil, fmt.Errorf("could not determine Notion page ID from %q", ref)
 		}
-		add(pageCandidate{ID: id, FetchRef: ref, Page: existing[id]})
+		add(pageCandidate{ID: id, FetchRef: ref, Page: existing[id], Explicit: true})
 	}
 	for _, query := range opts.Queries {
 		query = strings.TrimSpace(query)
@@ -210,8 +228,12 @@ func (c Client) candidates(
 				pageSize = remaining
 			}
 		}
-		results, _, err := gateway.searchPages(ctx, tools.Search, query, pageSize, nil)
+		results, _, err := gateway.searchExcluding(ctx, tools, query, pageSize, nil, excluded, summary)
 		if err != nil {
+			if excluded != nil {
+				summary.Warnings = append(summary.Warnings, "Notion MCP query skipped: "+err.Error())
+				continue
+			}
 			return nil, err
 		}
 		for _, result := range results {
@@ -227,11 +249,20 @@ func (c Client) candidates(
 					LastEditedTime: parseTimestamp(result.Timestamp),
 				}
 			}
-			add(pageCandidate{ID: result.ID, FetchRef: result.ID, Page: page})
+			add(pageCandidate{ID: result.ID, FetchRef: result.ID, Page: page, SearchVerified: true})
 		}
 	}
 	if !explicit {
-		candidates, err := automaticCandidates(ctx, st, existing)
+		eligible := existing
+		if excluded != nil {
+			eligible = map[string]store.Page{}
+			for id, page := range existing {
+				if !excluded.skip(pageCandidate{ID: id}, summary) {
+					eligible[id] = page
+				}
+			}
+		}
+		candidates, err := automaticCandidates(ctx, st, eligible)
 		if err != nil {
 			return nil, err
 		}

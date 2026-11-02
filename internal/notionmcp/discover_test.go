@@ -42,6 +42,8 @@ type crawlFixture struct {
 	fetched       []string
 	rateLimited   map[string]bool
 	searches      []map[string]any
+	filtered      []searchResult
+	failFiltered  bool
 }
 
 func newCrawlFixture() *crawlFixture {
@@ -83,9 +85,10 @@ func (f *crawlFixture) serve(w http.ResponseWriter, r *http.Request) {
 		search := map[string]any{"name": "notion_search", "_meta": map[string]any{"connector_id": testConnectorID, "connector_name": "Notion"}}
 		if f.withSchema {
 			search["inputSchema"] = map[string]any{"type": "object", "properties": map[string]any{
-				"query":     map[string]any{"type": "string"},
-				"sort":      map[string]any{"type": "string", "enum": []string{"relevance", "last_edited", "created"}},
-				"page_size": map[string]any{"type": "integer", "maximum": 50},
+				"teamspace_id": map[string]any{"type": "string"},
+				"query":        map[string]any{"type": "string"},
+				"sort":         map[string]any{"type": "string", "enum": []string{"relevance", "last_edited", "created"}},
+				"page_size":    map[string]any{"type": "integer", "maximum": 50},
 				"filters": map[string]any{"type": "object", "properties": map[string]any{
 					"created_date_range":     map[string]any{"type": "object", "properties": map[string]any{"start_date": map[string]any{"type": "string"}, "end_date": map[string]any{"type": "string"}}},
 					"last_edited_date_range": map[string]any{"type": "object", "properties": map[string]any{"start_date": map[string]any{"type": "string"}, "end_date": map[string]any{"type": "string"}}},
@@ -104,7 +107,15 @@ func (f *crawlFixture) serve(w http.ResponseWriter, r *http.Request) {
 			f.mu.Lock()
 			f.searches = append(f.searches, arguments)
 			results := append([]searchResult(nil), f.sweep...)
+			team, _ := arguments["teamspace_id"].(string)
+			if team != "" {
+				results = f.filtered
+			}
 			f.mu.Unlock()
+			if team != "" && f.failFiltered {
+				writeRPCResult(w, request.ID, map[string]any{"isError": true})
+				return
+			}
 			payload, _ := json.Marshal(map[string]any{"results": results, "type": "workspace_search"})
 			writeToolText(w, request.ID, string(payload))
 		case "notion_fetch":

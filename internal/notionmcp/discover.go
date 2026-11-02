@@ -25,9 +25,11 @@ const (
 var collectionRefPattern = regexp.MustCompile(`(?i)collection://([0-9a-f-]{32,36})`)
 
 type crawlQueue struct {
-	items []pageCandidate
-	index map[string]int
-	head  int
+	excluded *exclusions
+	summary  *Summary
+	items    []pageCandidate
+	index    map[string]int
+	head     int
 }
 
 func newCrawlQueue() *crawlQueue {
@@ -42,6 +44,9 @@ func (q *crawlQueue) add(candidate pageCandidate) {
 		if candidate.Refresh {
 			q.items[i].Refresh = true
 		}
+		return
+	}
+	if q.excluded.skip(candidate, q.summary) {
 		return
 	}
 	q.index[candidate.ID] = len(q.items)
@@ -65,10 +70,13 @@ func (c Client) discover(
 	st *store.Store,
 	existing map[string]store.Page,
 	opts SyncOptions,
+	excluded *exclusions,
 ) (Summary, error) {
 	startedAt := time.Now().UTC()
 	var summary Summary
 	queue := newCrawlQueue()
+	queue.excluded = excluded
+	queue.summary = &summary
 	explicitRefresh := map[string]bool{}
 	since, err := discoverySince(ctx, st, startedAt)
 	if err != nil {
@@ -85,14 +93,14 @@ func (c Client) discover(
 			return summary, fmt.Errorf("could not determine Notion page ID from %q", ref)
 		}
 		explicitRefresh[id] = true
-		queue.add(pageCandidate{ID: id, FetchRef: ref, Page: existing[id], Refresh: true})
+		queue.add(pageCandidate{ID: id, FetchRef: ref, Page: existing[id], Refresh: true, Explicit: true})
 	}
 	for _, query := range opts.Queries {
 		query = strings.TrimSpace(query)
 		if query == "" {
 			continue
 		}
-		results, _, err := gateway.searchPages(ctx, tools.Search, query, defaultSweepPageSize, nil)
+		results, _, err := gateway.searchExcluding(ctx, tools, query, defaultSweepPageSize, nil, excluded, &summary)
 		if err != nil {
 			summary.Warnings = append(summary.Warnings, fmt.Sprintf("Notion MCP search failed for %q: %v", query, err))
 			continue
@@ -123,6 +131,9 @@ func (c Client) discover(
 			break
 		}
 		candidate := queue.pop()
+		if excluded.skip(candidate, &summary) {
+			continue
+		}
 		if !explicitRefresh[candidate.ID] {
 			notFound, err := st.HasRecentSyncState(ctx, store.SourceNotionMCP, "page_not_found", candidate.ID, startedAt.Add(-7*24*time.Hour).UnixMilli())
 			if err != nil {
@@ -192,7 +203,7 @@ func sweepRecentEdits(
 		summary.Warnings = append(summary.Warnings, "Notion MCP search tool exposes neither a last-edited sort nor a last-edited date filter; recent edits are discovered only through links and --query")
 		return
 	}
-	results, notices, err := gateway.searchPages(ctx, tools.Search, "", pageSize, arguments)
+	results, notices, err := gateway.searchExcluding(ctx, tools, "", pageSize, arguments, queue.excluded, summary)
 	if err != nil {
 		summary.Warnings = append(summary.Warnings, fmt.Sprintf("Notion MCP recent-edit search failed: %v", err))
 		return
@@ -226,7 +237,7 @@ func searchCandidate(result searchResult, existing map[string]store.Page) pageCa
 			LastEditedTime: parseTimestamp(result.Timestamp),
 		}
 	}
-	return pageCandidate{ID: id, FetchRef: result.ID, Page: page}
+	return pageCandidate{ID: id, FetchRef: result.ID, Page: page, SearchVerified: true}
 }
 
 func discoverySince(ctx context.Context, st *store.Store, now time.Time) (time.Time, error) {
